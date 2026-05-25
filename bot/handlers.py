@@ -16,7 +16,7 @@ from utils.logger import get_logger
 from utils.rate_limit import RateLimiter
 from utils.security import normalize_phone
 from utils.session_store import SessionStore
-from utils.validators import URLValidationError, validate_pwthor_url
+from utils.validators import URLValidationError, is_pwthor_url, validate_public_https_url
 
 
 class ConversationState:
@@ -33,6 +33,7 @@ def register_handlers(app: Client, settings: Settings, store: SessionStore) -> N
     global_downloads = asyncio.Semaphore(settings.max_global_downloads)
     states: dict[int, str] = {}
     pending_logins: dict[int, tuple[PendingLogin, float]] = {}
+    pending_urls: dict[int, str] = {}
 
     async def admin_log(text: str) -> None:
         if not settings.admin_chat_id:
@@ -55,8 +56,8 @@ def register_handlers(app: Client, settings: Settings, store: SessionStore) -> N
         temp_path: Path | None = None
         try:
             session = await store.load(job.user_id)
-            if not session:
-                await edit_status(status, "Your PWThor session expired. Send /start to log in again.")
+            if is_pwthor_url(job.url, settings.pwthor_base_url) and not session:
+                await edit_status(status, "This PWThor link needs login. Send /start and try again.")
                 return
 
             last_update = 0.0
@@ -71,7 +72,8 @@ def register_handlers(app: Client, settings: Settings, store: SessionStore) -> N
             async with global_downloads:
                 result = await downloader.download(job.user_id, job.url, session, job.cancel_event, progress)
             temp_path = result.path
-            await store.touch(job.user_id)
+            if session:
+                await store.touch(job.user_id)
             await edit_status(status, "Uploading to Telegram...")
 
             def upload_progress(current: int, total: int) -> None:
@@ -109,6 +111,15 @@ def register_handlers(app: Client, settings: Settings, store: SessionStore) -> N
 
     queue_manager = DownloadQueueManager(settings.per_user_queue_size, process_download)
 
+    async def enqueue_url(message: Message, url: str) -> None:
+        try:
+            position = await queue_manager.enqueue(
+                DownloadJob(user_id=message.from_user.id, chat_id=message.chat.id, url=url)
+            )
+            await message.reply_text(f"Added to your queue. Position: {position}.")
+        except asyncio.QueueFull:
+            await message.reply_text("Your queue is full. Wait for a download to finish or use /cancel.")
+
     async def check_rate(message: Message) -> bool:
         user_id = message.from_user.id if message.from_user else message.chat.id
         if rate_limiter.allow(user_id):
@@ -124,11 +135,13 @@ def register_handlers(app: Client, settings: Settings, store: SessionStore) -> N
         if await store.load(user_id):
             states[user_id] = ConversationState.READY
             await message.reply_text(
-                "You are logged in. Send a PWThor lecture page or direct PWThor video link to download."
+                "You are logged in. Send any supported HTTPS media page or direct video link."
             )
             return
-        states[user_id] = ConversationState.AWAITING_PHONE
-        await message.reply_text("Send your PWThor phone number. Use the 10-digit Indian mobile number.")
+        states.pop(user_id, None)
+        await message.reply_text(
+            "Send a video page or direct media link first. If a PWThor link needs login, I will ask for your phone and OTP."
+        )
 
     @app.on_message(filters.command("logout") & filters.private)
     async def logout(_: Client, message: Message) -> None:
@@ -138,7 +151,8 @@ def register_handlers(app: Client, settings: Settings, store: SessionStore) -> N
         await queue_manager.cancel_user(user_id)
         await store.delete(user_id)
         pending_logins.pop(user_id, None)
-        states[user_id] = ConversationState.AWAITING_PHONE
+        pending_urls.pop(user_id, None)
+        states.pop(user_id, None)
         await message.reply_text("Logged out and removed your saved PWThor session.")
 
     @app.on_message(filters.command("cancel") & filters.private)
@@ -149,7 +163,8 @@ def register_handlers(app: Client, settings: Settings, store: SessionStore) -> N
         cancelled = await queue_manager.cancel_user(user_id)
         if states.get(user_id) == ConversationState.AWAITING_OTP:
             pending_logins.pop(user_id, None)
-            states[user_id] = ConversationState.AWAITING_PHONE
+            pending_urls.pop(user_id, None)
+            states.pop(user_id, None)
             cancelled += 1
         await message.reply_text("Cancelled active and queued work." if cancelled else "No active download to cancel.")
 
@@ -188,15 +203,16 @@ def register_handlers(app: Client, settings: Settings, store: SessionStore) -> N
                 await store.save(user_id, stored_session)
                 pending_logins.pop(user_id, None)
                 states[user_id] = ConversationState.READY
-                await message.reply_text(
-                    "Login successful. Send a PWThor lecture page or direct PWThor video link."
-                )
+                queued_url = pending_urls.pop(user_id, None)
+                await message.reply_text("Login successful.")
+                if queued_url:
+                    await enqueue_url(message, queued_url)
                 await admin_log(f"PWThor login successful for Telegram user {user_id}")
             except PWThorAuthError as exc:
                 await message.reply_text(f"OTP verification failed: {exc}")
             return
 
-        if state == ConversationState.AWAITING_PHONE or not await store.load(user_id):
+        if state == ConversationState.AWAITING_PHONE:
             try:
                 phone = normalize_phone(text)
                 pending = await pwthor.request_otp(phone)
@@ -208,15 +224,17 @@ def register_handlers(app: Client, settings: Settings, store: SessionStore) -> N
             return
 
         try:
-            validate_pwthor_url(text, settings.pwthor_base_url)
+            url = validate_public_https_url(text, settings.allowed_source_host_set)
         except URLValidationError as exc:
             await message.reply_text(f"Invalid URL: {exc}")
             return
 
-        try:
-            position = await queue_manager.enqueue(
-                DownloadJob(user_id=user_id, chat_id=message.chat.id, url=text)
+        if is_pwthor_url(url, settings.pwthor_base_url) and not await store.load(user_id):
+            pending_urls[user_id] = url
+            states[user_id] = ConversationState.AWAITING_PHONE
+            await message.reply_text(
+                "This PWThor link may need login. Send your 10-digit PWThor phone number."
             )
-            await message.reply_text(f"Added to your queue. Position: {position}.")
-        except asyncio.QueueFull:
-            await message.reply_text("Your queue is full. Wait for a download to finish or use /cancel.")
+            return
+
+        await enqueue_url(message, url)

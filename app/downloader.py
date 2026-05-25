@@ -17,7 +17,7 @@ from config.settings import Settings
 from utils.logger import get_logger
 from utils.security import safe_join, sanitize_filename
 from utils.session_store import StoredSession
-from utils.validators import validate_pwthor_url
+from utils.validators import validate_public_https_url
 
 ProgressCallback = Callable[[str], Awaitable[None]]
 
@@ -42,11 +42,11 @@ class PWThorDownloader:
         self,
         telegram_user_id: int,
         url: str,
-        session: StoredSession,
+        session: StoredSession | None,
         cancel_event: asyncio.Event,
         progress: ProgressCallback,
     ) -> DownloadResult:
-        source_url = validate_pwthor_url(url, self.settings.pwthor_base_url)
+        source_url = validate_public_https_url(url, self.settings.allowed_source_host_set)
         media_url, title = await self.resolve_media_url(source_url, session)
 
         user_dir = safe_join(self.settings.downloads_dir, str(telegram_user_id))
@@ -81,12 +81,12 @@ class PWThorDownloader:
 
         return DownloadResult(path=output, title=title, size_bytes=size)
 
-    async def resolve_media_url(self, url: str, session: StoredSession) -> tuple[str, str]:
+    async def resolve_media_url(self, url: str, session: StoredSession | None) -> tuple[str, str]:
         if self._looks_like_direct_media(url):
             return url, self._title_from_url(url)
 
         async with httpx.AsyncClient(
-            cookies=session.cookies,
+            cookies=session.cookies if session else None,
             follow_redirects=True,
             timeout=httpx.Timeout(self.settings.request_timeout_seconds),
             headers=self._browser_headers(),
@@ -113,11 +113,11 @@ class PWThorDownloader:
         self,
         media_url: str,
         output: Path,
-        session: StoredSession,
+        session: StoredSession | None,
         cancel_event: asyncio.Event,
         progress: ProgressCallback,
     ) -> None:
-        cookie_header = self._cookie_header(session.cookies)
+        cookie_header = self._cookie_header(session.cookies if session else {})
         header_lines = [
             "User-Agent: Mozilla/5.0",
             f"Referer: {self.settings.pwthor_base_url}/",
@@ -250,6 +250,8 @@ class PWThorDownloader:
         host = parsed.hostname or ""
         if parsed.scheme != "https":
             return False
+        if "*" in self.settings.allowed_media_host_set:
+            return True
         for allowed_host in self.settings.allowed_media_host_set:
             if host == allowed_host or host.endswith(f".{allowed_host}"):
                 return True

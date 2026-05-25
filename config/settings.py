@@ -17,7 +17,8 @@ class Settings(BaseSettings):
     session_secret: str | None = Field(default=None, alias="SESSION_SECRET")
     admin_chat_id: int | None = Field(default=None, alias="ADMIN_CHAT_ID")
     pwthor_base_url: str = Field(default="https://pwthor.live", alias="PWTHOR_BASE_URL")
-    allowed_media_hosts: str = Field(default="pwthor.live", alias="ALLOWED_MEDIA_HOSTS")
+    allowed_source_hosts: str = Field(default="*", alias="ALLOWED_SOURCE_HOSTS")
+    allowed_media_hosts: str = Field(default="*", alias="ALLOWED_MEDIA_HOSTS")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     downloads_dir: Path = Field(default=Path("downloads"), alias="DOWNLOADS_DIR")
@@ -48,6 +49,14 @@ class Settings(BaseSettings):
             if host.strip()
         }
 
+    @property
+    def allowed_source_host_set(self) -> set[str]:
+        return {
+            host.strip().lower()
+            for host in self.allowed_source_hosts.split(",")
+            if host.strip()
+        }
+
     @field_validator("pwthor_base_url")
     @classmethod
     def normalize_base_url(cls, value: str) -> str:
@@ -66,10 +75,21 @@ class Settings(BaseSettings):
     @field_validator("allowed_media_hosts")
     @classmethod
     def validate_allowed_media_hosts(cls, value: str) -> str:
+        return cls._validate_host_list(value, "ALLOWED_MEDIA_HOSTS", allow_wildcard=True)
+
+    @field_validator("allowed_source_hosts")
+    @classmethod
+    def validate_allowed_source_hosts(cls, value: str) -> str:
+        return cls._validate_host_list(value, "ALLOWED_SOURCE_HOSTS", allow_wildcard=True)
+
+    @classmethod
+    def _validate_host_list(cls, value: str, name: str, allow_wildcard: bool) -> str:
         hosts = [host.strip().lower() for host in value.split(",") if host.strip()]
         if not hosts:
-            raise ValueError("ALLOWED_MEDIA_HOSTS must contain at least one host")
+            raise ValueError(f"{name} must contain at least one host")
         for host in hosts:
+            if allow_wildcard and host == "*":
+                continue
             if not re.fullmatch(r"[a-z0-9.-]+", host):
-                raise ValueError("ALLOWED_MEDIA_HOSTS must be a comma-separated host list")
+                raise ValueError(f"{name} must be a comma-separated host list")
         return ",".join(hosts)

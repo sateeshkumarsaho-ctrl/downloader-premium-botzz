@@ -43,20 +43,22 @@ SESSION_SECRET=
 ADMIN_CHAT_ID=
 MAX_DOWNLOAD_MB=450
 MAX_GLOBAL_DOWNLOADS=1
-ALLOWED_MEDIA_HOSTS=pwthor.live
+ALLOWED_SOURCE_HOSTS=*
+ALLOWED_MEDIA_HOSTS=*
 ```
 
 Never commit `.env`, Pyrogram session files, encrypted user sessions, or downloaded media.
 
 ## Bot Workflow
 
-1. User sends `/start`.
-2. Bot asks for the PWThor phone number.
-3. Bot requests OTP from PWThor.
-4. User replies with OTP.
-5. Bot stores an encrypted session as `sessions/<telegram_user_id>.json.enc`.
-6. User sends a PWThor lecture page or direct PWThor `.m3u8`/`.mp4` link.
-7. Bot resolves the authenticated media URL, downloads with FFmpeg, uploads to Telegram, and deletes the temp file.
+1. User sends a public HTTPS video page or direct media link.
+2. Public/non-login links are queued immediately.
+3. If a PWThor link needs login, the bot asks for the PWThor phone number.
+4. Bot requests OTP from PWThor.
+5. User replies with OTP.
+6. Bot stores an encrypted session as `sessions/<telegram_user_id>.json.enc`.
+7. Bot queues the pending PWThor link automatically.
+8. Bot resolves the media URL, downloads with FFmpeg, uploads to Telegram, and deletes the temp file.
 
 Commands:
 
@@ -98,7 +100,7 @@ The bot uses ephemeral storage safely by keeping downloads size-limited, deletin
 - Secrets are only read from environment variables.
 - User sessions are encrypted before disk storage.
 - Session files are isolated by Telegram user ID.
-- Links are restricted to HTTPS `pwthor.live` hosts.
+- Links are restricted to public HTTPS hosts. Configure `ALLOWED_SOURCE_HOSTS` to narrow sources.
 - Extracted media is restricted to `ALLOWED_MEDIA_HOSTS`.
 - Path traversal in user-provided URLs is rejected.
 - DRM-encrypted streams are not bypassed.
