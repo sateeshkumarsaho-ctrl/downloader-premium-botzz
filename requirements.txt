@@ -1,0 +1,7 @@
+pyrogram==2.0.106
+tgcrypto==1.2.5
+httpx==0.27.2
+pydantic==2.10.6
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+cryptography==44.0.0

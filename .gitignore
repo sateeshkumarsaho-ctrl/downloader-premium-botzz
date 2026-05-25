@@ -1,0 +1,16 @@
+.env
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log
+downloads/*
+sessions/*
+!downloads/.gitkeep
+!sessions/.gitkeep
+*.session
+*.session-journal
+*.sqlite
+*.sqlite3

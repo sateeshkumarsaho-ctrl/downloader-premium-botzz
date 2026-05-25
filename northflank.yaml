@@ -1,0 +1,33 @@
+# Northflank deployment service payload for a no-port worker.
+# Create a Docker build service from this repository first, then use its ID in deployment.internal.id.
+name: PWThor Telegram Downloader
+description: Pyrogram worker for authenticated PWThor downloads
+billing:
+  deploymentPlan: nf-compute-20
+deployment:
+  instances: 1
+  docker:
+    configType: customCommand
+    customCommand: python -m app.main
+  storage:
+    ephemeralStorage:
+      storageSize: 1024
+    shmSize: 64
+  gracePeriodSeconds: 30
+  internal:
+    id: pwthor-downloader-build
+    branch: main
+    buildSHA: latest
+ports: []
+runtimeEnvironment:
+  BOT_TOKEN: ""
+  API_ID: ""
+  API_HASH: ""
+  SESSION_SECRET: ""
+  ADMIN_CHAT_ID: ""
+  PWTHOR_BASE_URL: "https://pwthor.live"
+  ALLOWED_MEDIA_HOSTS: "pwthor.live"
+  MAX_DOWNLOAD_MB: "450"
+  MAX_GLOBAL_DOWNLOADS: "1"
+  PER_USER_QUEUE_SIZE: "3"
+  SESSION_TTL_DAYS: "30"
